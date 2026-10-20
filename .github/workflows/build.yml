@@ -1,0 +1,48 @@
+name: Build and verify XboxPC
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Parser and relinker tests
+        run: python -m unittest discover -s tests -v
+      - name: Configure
+        run: cmake -S . -B build
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Runtime conformance
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Relink and execute native fixture without guest DLL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist
+          python -m xboxpc inspect build/Release/xboxpc_fixture.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Inspection failed' }
+          python -m xboxpc relink-fixture build/Release/xboxpc_fixture.exe dist/xboxpc_demo.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Relink failed' }
+          Copy-Item build/Release/xboxpc_host.dll dist/
+          & ./dist/xboxpc_demo.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native fixture failed' }
+          Copy-Item README.md dist/
+          Copy-Item Start-XboxPC.cmd dist/
+          Copy-Item -Recurse xboxpc dist/
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: XboxPC-v1-Windows-x64-research
+          path: dist/
+          if-no-files-found: error
